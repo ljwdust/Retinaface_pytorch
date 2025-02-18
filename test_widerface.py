@@ -11,6 +11,7 @@ import cv2
 from models.retinaface import RetinaFace
 from utils.box_utils import decode, decode_landm
 from utils.timer import Timer
+from tqdm import tqdm
 
 
 parser = argparse.ArgumentParser(description='Retinaface')
@@ -79,14 +80,14 @@ if __name__ == '__main__':
     net = load_model(net, args.trained_model, args.cpu)
     net.eval()
     print('Finished loading model!')
-    print(net)
+    # print(net)
     cudnn.benchmark = True
     device = torch.device("cpu" if args.cpu else "cuda")
     net = net.to(device)
 
     # testing dataset
     testset_folder = args.dataset_folder
-    testset_list = args.dataset_folder[:-7] + "wider_val.txt"
+    testset_list = os.path.join(args.dataset_folder[:-7], "imglist.txt")
 
     with open(testset_list, 'r') as fr:
         test_dataset = fr.read().split()
@@ -95,8 +96,8 @@ if __name__ == '__main__':
     _t = {'forward_pass': Timer(), 'misc': Timer()}
 
     # testing begin
-    for i, img_name in enumerate(test_dataset):
-        image_path = testset_folder + img_name
+    for i, img_name in tqdm(enumerate(test_dataset)):
+        image_path = os.path.join(testset_folder, img_name)
         img_raw = cv2.imread(image_path, cv2.IMREAD_COLOR)
         img = np.float32(img_raw)
 
@@ -171,7 +172,7 @@ if __name__ == '__main__':
         _t['misc'].toc()
 
         # --------------------------------------------------------------------
-        save_name = args.save_folder + img_name[:-4] + ".txt"
+        save_name = os.path.join(args.save_folder, img_name[:-4] + ".txt")
         dirname = os.path.dirname(save_name)
         if not os.path.isdir(dirname):
             os.makedirs(dirname)
@@ -190,7 +191,7 @@ if __name__ == '__main__':
                 line = str(x) + " " + str(y) + " " + str(w) + " " + str(h) + " " + confidence + " \n"
                 fd.write(line)
 
-        print('im_detect: {:d}/{:d} forward_pass_time: {:.4f}s misc: {:.4f}s'.format(i + 1, num_images, _t['forward_pass'].average_time, _t['misc'].average_time))
+        # print('im_detect: {:d}/{:d} forward_pass_time: {:.4f}s misc: {:.4f}s'.format(i + 1, num_images, _t['forward_pass'].average_time, _t['misc'].average_time))
 
         # save image
         if args.save_image:

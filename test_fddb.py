@@ -4,6 +4,8 @@ import argparse
 import torch
 import torch.backends.cudnn as cudnn
 import numpy as np
+from pathlib import Path
+from tqdm import tqdm
 from data import cfg_mnet, cfg_re50
 from layers.functions.prior_box import PriorBox
 from utils.nms.py_cpu_nms import py_cpu_nms
@@ -11,6 +13,8 @@ import cv2
 from models.retinaface import RetinaFace
 from utils.box_utils import decode, decode_landm
 from utils.timer import Timer
+from utils.draw_facebox import draw_facebox
+
 
 parser = argparse.ArgumentParser(description='Retinaface')
 
@@ -24,7 +28,7 @@ parser.add_argument('--confidence_threshold', default=0.02, type=float, help='co
 parser.add_argument('--top_k', default=5000, type=int, help='top_k')
 parser.add_argument('--nms_threshold', default=0.4, type=float, help='nms_threshold')
 parser.add_argument('--keep_top_k', default=750, type=int, help='keep_top_k')
-parser.add_argument('-s', '--save_image', action="store_true", default=False, help='show detection results')
+parser.add_argument('-s', '--save_vis_path', default='', type=str, help='visualization save path')
 parser.add_argument('--vis_thres', default=0.5, type=float, help='visualization_threshold')
 args = parser.parse_args()
 
@@ -67,6 +71,7 @@ def load_model(model, pretrained_path, load_to_cpu):
 
 if __name__ == '__main__':
     torch.set_grad_enabled(False)
+    
     cfg = None
     if args.network == "mobile0.25":
         cfg = cfg_mnet
@@ -77,16 +82,10 @@ if __name__ == '__main__':
     net = load_model(net, args.trained_model, args.cpu)
     net.eval()
     print('Finished loading model!')
-    print(net)
+    # print(net)
     cudnn.benchmark = True
     device = torch.device("cpu" if args.cpu else "cuda")
     net = net.to(device)
-
-
-    # save file
-    if not os.path.exists(args.save_folder):
-        os.makedirs(args.save_folder)
-    fw = open(os.path.join(args.save_folder, args.dataset + '_dets.txt'), 'w')
 
     # testing dataset
     testset_folder = os.path.join('data', args.dataset, 'images/')
@@ -100,8 +99,10 @@ if __name__ == '__main__':
 
     _t = {'forward_pass': Timer(), 'misc': Timer()}
 
+    from utils.get_img_dict import get_fddb_dict
+    img_dict = get_fddb_dict()
     # testing begin
-    for i, img_name in enumerate(test_dataset):
+    for i, img_name in tqdm(enumerate(test_dataset)):
         image_path = testset_folder + img_name + '.jpg'
         img_raw = cv2.imread(image_path, cv2.IMREAD_COLOR)
 
@@ -163,45 +164,33 @@ if __name__ == '__main__':
         dets = np.concatenate((dets, landms), axis=1)
         _t['misc'].toc()
 
-        # save dets
-        if args.dataset == "FDDB":
-            fw.write('{:s}\n'.format(img_name))
-            fw.write('{:.1f}\n'.format(dets.shape[0]))
-            for k in range(dets.shape[0]):
-                xmin = dets[k, 0]
-                ymin = dets[k, 1]
-                xmax = dets[k, 2]
-                ymax = dets[k, 3]
-                score = dets[k, 4]
-                w = xmax - xmin + 1
-                h = ymax - ymin + 1
-                # fw.write('{:.3f} {:.3f} {:.3f} {:.3f} {:.10f}\n'.format(xmin, ymin, w, h, score))
-                fw.write('{:d} {:d} {:d} {:d} {:.10f}\n'.format(int(xmin), int(ymin), int(w), int(h), score))
-        print('im_detect: {:d}/{:d} forward_pass_time: {:.4f}s misc: {:.4f}s'.format(i + 1, num_images, _t['forward_pass'].average_time, _t['misc'].average_time))
+        # --------------------------------------------------------------------
+        folder_str = img_dict[img_name]
+        img_name = img_name.replace('/','_')
+        save_name = os.path.join(args.save_folder, folder_str, img_name + ".txt")
+        dirname = os.path.dirname(save_name)
+        if not os.path.isdir(dirname):
+            os.makedirs(dirname)
+        with open(save_name, "w") as fd:
+            bboxs = dets
+            file_name = os.path.basename(save_name)[:-4] + "\n"
+            bboxs_num = str(len(bboxs)) + "\n"
+            fd.write(file_name)
+            fd.write(bboxs_num)
+            for box in bboxs:
+                x = int(box[0])
+                y = int(box[1])
+                w = int(box[2]) - int(box[0])
+                h = int(box[3]) - int(box[1])
+                confidence = str(box[4])
+                line = str(x) + " " + str(y) + " " + str(w) + " " + str(h) + " " + confidence + " \n"
+                fd.write(line)
 
-        # show image
-        if args.save_image:
-            for b in dets:
-                if b[4] < args.vis_thres:
-                    continue
-                text = "{:.4f}".format(b[4])
-                b = list(map(int, b))
-                cv2.rectangle(img_raw, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 2)
-                cx = b[0]
-                cy = b[1] + 12
-                cv2.putText(img_raw, text, (cx, cy),
-                            cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255))
+        # print('im_detect: {:d}/{:d} forward_pass_time: {:.4f}s misc: {:.4f}s'.format(i + 1, num_images, _t['forward_pass'].average_time, _t['misc'].average_time))
 
-                # landms
-                cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
-                cv2.circle(img_raw, (b[7], b[8]), 1, (0, 255, 255), 4)
-                cv2.circle(img_raw, (b[9], b[10]), 1, (255, 0, 255), 4)
-                cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
-                cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
-            # save image
-            if not os.path.exists("./results/"):
-                os.makedirs("./results/")
-            name = "./results/" + str(i) + ".jpg"
-            cv2.imwrite(name, img_raw)
-
-    fw.close()
+        # draw face box and save image
+        if args.save_vis_path:
+            img_facebox = draw_facebox(img_raw, dets, args.vis_thres, color=(0, 0, 255))
+            Path(args.save_vis_path).mkdir(parents=True, exist_ok=True)
+            name = (Path(args.save_vis_path) / (str(img_name) + ".jpg")).as_posix()
+            cv2.imwrite(name, img_facebox)
